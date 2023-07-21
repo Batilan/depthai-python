@@ -12,6 +12,18 @@ import cv2
 import depthai as dai
 import numpy as np
 import time
+from datetime import datetime
+
+"""
+Set some constants for default parameters
+"""
+DETECT_SET= ['person'] # use 'pottedplant',  for easy hit
+#DETECT_SET= ['person', 'pottedplant' ] # use 'pottedplant',  for easy hit
+HIT_INTERVAL = 2 # Number of seconds between reported hits on detected objects
+MIN_CONFIDENCE_LEVEL = 0.7 # Minimum confidence level before a detection is considered positive
+ALPHA=0.7
+
+previous_hit_time = datetime.now()
 
 # Get argument first
 nnPath = str((Path(__file__).parent / Path('../models/yolo-v4-tiny-tf_openvino_2021.4_6shave.blob')).resolve().absolute())
@@ -65,7 +77,8 @@ camRgb.setPreviewSize(416, 416)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
 camRgb.setInterleaved(False)
 camRgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
-camRgb.setFps(40)
+camRgb.setFps(15) # CHANGED
+#camRgb.setFps(40) # CHANGED
 
 # Network specific settings
 detectionNetwork.setConfidenceThreshold(0.5)
@@ -89,6 +102,7 @@ detectionNetwork.out.link(nnOut.input)
 
 # Connect to device and start pipeline
 with dai.Device(pipeline) as device:
+    previous_hit_time = datetime.now()
 
     # Output queues will be used to get the rgb frames and nn data from the outputs defined above
     qRgb = device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
@@ -108,22 +122,37 @@ with dai.Device(pipeline) as device:
 
     def displayFrame(name, frame):
         color = (255, 0, 0)
+        overlay = None
+        blended = None
         for detection in detections:
-            bbox = frameNorm(frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax))
-            cv2.putText(frame, labelMap[detection.label], (bbox[0] + 10, bbox[1] + 20), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
-            cv2.putText(frame, f"{int(detection.confidence * 100)}%", (bbox[0] + 10, bbox[1] + 40), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+            if labelMap[detection.label] in DETECT_SET:
+                bbox = frameNorm(frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax))
+                overlay = frame.copy()
+                blended = frame.copy()
+                cv2.putText(overlay, labelMap[detection.label], (bbox[0] + 5, bbox[3] - 25), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (255,255,0))
+                cv2.putText(overlay, f"{int(detection.confidence * 100)}%", (bbox[0] + 5, bbox[3] -5 ), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (255,255,0))
+                cv2.rectangle(overlay, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                now = datetime.now()
+                current_time = now.strftime("%H:%M:%S")
+                global previous_hit_time
+                diff_time = now - previous_hit_time
+            if detection.confidence >= MIN_CONFIDENCE_LEVEL and labelMap[detection.label] in DETECT_SET and diff_time.total_seconds() > HIT_INTERVAL:
+                print('%s: Detected: %s, confidence %f' %  (current_time, labelMap[detection.label],(detection.confidence * 100.0) ))
+                previous_hit_time = now
+                cv2.addWeighted(overlay, ALPHA, frame, 1 - ALPHA, 0, blended)
+                cv2.imwrite("%s_detected_%s.png" % (labelMap[detection.label], current_time), blended)
         # Show the frame
         cv2.imshow(name, frame)
 
     while True:
+        # Output queues will be used to get the rgb frames and nn data from the outputs defined above
         if syncNN:
             inRgb = qRgb.get()
             inDet = qDet.get()
         else:
             inRgb = qRgb.tryGet()
             inDet = qDet.tryGet()
-
+   
         if inRgb is not None:
             frame = inRgb.getCvFrame()
             cv2.putText(frame, "NN fps: {:.2f}".format(counter / (time.monotonic() - startTime)),
