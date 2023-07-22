@@ -13,14 +13,15 @@ import depthai as dai
 import numpy as np
 import time
 from datetime import datetime
+import bot
 
 """
 Set some constants for default parameters
 """
 DETECT_SET= ['person'] # use 'pottedplant',  for easy hit
 #DETECT_SET= ['person', 'pottedplant' ] # use 'pottedplant',  for easy hit
-HIT_INTERVAL = 2 # Number of seconds between reported hits on detected objects
-MIN_CONFIDENCE_LEVEL = 0.7 # Minimum confidence level before a detection is considered positive
+HIT_INTERVAL = 5 # Number of seconds between reported hits on detected objects
+MIN_CONFIDENCE_LEVEL = 0.8 # Minimum confidence level before a detection is considered positive
 ALPHA=0.7
 
 previous_hit_time = datetime.now()
@@ -62,6 +63,7 @@ syncNN = True
 
 # Create pipeline
 pipeline = dai.Pipeline()
+telegram_bot = bot.bot()
 
 # Define sources and outputs
 camRgb = pipeline.create(dai.node.ColorCamera)
@@ -121,14 +123,14 @@ with dai.Device(pipeline) as device:
         return (np.clip(np.array(bbox), 0, 1) * normVals).astype(int)
 
     def displayFrame(name, frame):
+        do_write = False
+        detected = "detected_"
         color = (255, 0, 0)
-        overlay = None
-        blended = None
+        overlay = frame.copy()
+        blended = frame.copy()
         for detection in detections:
             if labelMap[detection.label] in DETECT_SET:
                 bbox = frameNorm(frame, (detection.xmin, detection.ymin, detection.xmax, detection.ymax))
-                overlay = frame.copy()
-                blended = frame.copy()
                 cv2.putText(overlay, labelMap[detection.label], (bbox[0] + 5, bbox[3] - 25), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (255,255,0))
                 cv2.putText(overlay, f"{int(detection.confidence * 100)}%", (bbox[0] + 5, bbox[3] -5 ), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (255,255,0))
                 cv2.rectangle(overlay, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
@@ -136,13 +138,20 @@ with dai.Device(pipeline) as device:
                 current_time = now.strftime("%H:%M:%S")
                 global previous_hit_time
                 diff_time = now - previous_hit_time
-            if detection.confidence >= MIN_CONFIDENCE_LEVEL and labelMap[detection.label] in DETECT_SET and diff_time.total_seconds() > HIT_INTERVAL:
-                print('%s: Detected: %s, confidence %f' %  (current_time, labelMap[detection.label],(detection.confidence * 100.0) ))
-                previous_hit_time = now
                 cv2.addWeighted(overlay, ALPHA, frame, 1 - ALPHA, 0, blended)
-                cv2.imwrite("%s_detected_%s.png" % (labelMap[detection.label], current_time), blended)
+            if detection.confidence >= MIN_CONFIDENCE_LEVEL and labelMap[detection.label] in DETECT_SET and diff_time.total_seconds() > HIT_INTERVAL:
+                detected = detected + labelMap[detection.label]
+                detected_confidence = detection.confidence
+                do_write = True
+                previous_hit_time = now
         # Show the frame
-        cv2.imshow(name, frame)
+        cv2.imshow(name, blended)
+        if do_write:
+            image_file = "%s_%s.png" % (detected, current_time)
+            cv2.imwrite(image_file, blended)
+            telegram_bot.send_image("Person detected at %s" % current_time, image_file)
+            print('%s: Detected: %s, confidence %f' %  (current_time, detected,(detected_confidence * 100.0) ))
+    
 
     while True:
         # Output queues will be used to get the rgb frames and nn data from the outputs defined above
